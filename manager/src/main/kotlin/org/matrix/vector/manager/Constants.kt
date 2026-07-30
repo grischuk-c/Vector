@@ -24,14 +24,13 @@ object Constants {
      * would be ordinary Android practice and would land nowhere; there are none in this app.
      *
      * A message is `area: lowercase phrase naming the operation and its subject`, where the area
-     * is one of ipc, dns, apps, modules, backup, restore, scope, store, update, feed, auth,
+     * is one of ipc, dns, apps, modules, backup, restore, scope, store, update, feed,
      * status, framework, logs, actions, report, splash. The subject matters: "modules: enable of
      * $packageName failed" can be acted on, "failed to enable module" cannot.
      *
      * The `Throwable` is always the last argument — never `e.message`, which discards the stack,
      * and never `Log.getStackTraceString`, which discards the level. Nothing secret is ever
-     * interpolated: no OAuth token, no SAF `Uri` beyond its authority, no third-party query
-     * string.
+     * interpolated: no SAF `Uri` beyond its authority, no third-party query string.
      *
      * Levels are `e` when something the user asked for did not happen and nothing else will
      * explain it, `w` for a degraded path recovered from, and `i` for a one-off milestone worth
