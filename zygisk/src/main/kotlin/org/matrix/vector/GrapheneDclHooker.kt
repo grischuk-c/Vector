@@ -1,52 +1,54 @@
 package org.matrix.vector
 
 import android.content.pm.ApplicationInfo
-import de.robv.android.xposed.XC_MethodReplacement
+import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import org.lsposed.lspd.util.Utils
 
 /**
  * Exempts the parasitic manager's host package from GrapheneOS's "Restrict dynamic code loading"
- * (memory DCL) exploit protection.
+ * exploit protections.
  *
- * The setting is immutable and enabled for system apps. As the manager runs inside
- * [BuildConfig.InjectedPackageName] (`com.android.shell`, a system app), it cannot load its DEX
- * and fails to start. The hook forces the restriction to "allowed" for that package alone; every
- * other app retains GrapheneOS's verdict. It applies only on GrapheneOS, where the target class
- * exists, and only in system_server, where the value is resolved.
+ * GrapheneOS combines three separate restrictions — memory, storage and WebView DCL — into one
+ * bitmask in `DynCodeLoading.getAppBindFlags`, then arms the matching native ART checks in the app
+ * process. Each restriction is immutable and enabled for system apps. As the manager runs inside
+ * [BuildConfig.InjectedPackageName] (`com.android.shell`, a system app), the storage check rejects
+ * its DEX: the transplanted `sourceDir` is a `/proc/self/fd/N` handle, which is not on GrapheneOS's
+ * allow-list (`/apex`, `/system`, `/data/app`, …), so binding aborts with a "DCL via storage"
+ * SecurityException before the manager runs.
+ *
+ * The hook forces the bind flags to `0` for that package alone, clearing every DCL restriction at
+ * once; every other app retains GrapheneOS's verdict. It applies only on GrapheneOS, where the
+ * target class exists, and only in system_server, where the flags are resolved and shipped to the
+ * process.
  */
 object GrapheneDclHooker {
 
-    private const val ASW_CLASS = "android.ext.settings.app.AswRestrictMemoryDynCodeLoading"
+    private const val DCL_CLASS = "android.ext.dcl.DynCodeLoading"
 
     @JvmStatic
     fun start() {
-        val aswClass =
+        val dclClass =
             try {
-                XposedHelpers.findClass(ASW_CLASS, this.javaClass.classLoader)
+                XposedHelpers.findClass(DCL_CLASS, this.javaClass.classLoader)
             } catch (_: XposedHelpers.ClassNotFoundError) {
                 return // Not GrapheneOS.
             }
 
         try {
-            // Boolean getImmutableValue(Context, int, ApplicationInfo, GosPackageState, StateInfo)
-            // returns true (restricted), false (allowed), or null (user-configurable). A non-null
-            // result overrides the user toggle and the default, so false forces DCL to be allowed.
+            // int getAppBindFlags(Context, int userId, ApplicationInfo, GosPackageState) OR-combines
+            // RESTRICT_MEMORY_DCL, RESTRICT_STORAGE_DCL and RESTRICT_WEBVIEW_DCL. Zeroing it for the
+            // manager host leaves handleAppBindFlags with nothing to arm, so no DCL check fires.
             XposedBridge.hookAllMethods(
-                aswClass,
-                "getImmutableValue",
-                object : XC_MethodReplacement() {
-                    override fun replaceHookedMethod(param: MethodHookParam<*>): Any? {
+                dclClass,
+                "getAppBindFlags",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam<*>) {
                         val appInfo = param.args.getOrNull(2) as? ApplicationInfo
                         if (appInfo?.packageName == BuildConfig.InjectedPackageName) {
-                            return false // Allow the manager host to load its DEX.
+                            param.result = 0 // Allow the manager host to load its DEX.
                         }
-                        return XposedBridge.invokeOriginalMethod(
-                            param.method,
-                            param.thisObject,
-                            param.args,
-                        )
                     }
                 },
             )
